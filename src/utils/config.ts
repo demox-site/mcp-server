@@ -16,7 +16,7 @@ export interface MCPConfig {
 export function loadConfig(): MCPConfig {
   const clientId = process.env.DEMOX_CLIENT_ID || "demox-mcp-client";
   const authUrl =
-    process.env.DEMOX_AUTH_URL || "https://demox.site/#/mcp-authorize";
+    process.env.DEMOX_AUTH_URL || "https://demox.site/mcp-authorize";
   const apiBase = process.env.DEMOX_API_BASE || "https://demox.site";
   const serverEnv = process.env.DEMOX_SERVER_ENV || "demox-scf";
   // 新的 SCF mcp-api 端点
