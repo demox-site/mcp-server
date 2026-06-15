@@ -11,17 +11,22 @@ export interface MCPConfig {
   apiBase: string;
   serverEnv: string;
   cloudFunctionUrl: string;
+  websiteApiUrl: string;
 }
 
 export function loadConfig(): MCPConfig {
   const clientId = process.env.DEMOX_CLIENT_ID || "demox-mcp-client";
   const authUrl =
-    process.env.DEMOX_AUTH_URL || "http://localhost:8080/#/mcp-authorize";
+    process.env.DEMOX_AUTH_URL || "https://demox.site/mcp-authorize";
   const apiBase = process.env.DEMOX_API_BASE || "https://demox.site";
-  const serverEnv = process.env.DEMOX_SERVER_ENV || "moyu-3g5pbxld00f4aead";
+  const serverEnv = process.env.DEMOX_SERVER_ENV || "demox-scf";
+  // 新的 SCF mcp-api 端点
   const cloudFunctionUrl =
     process.env.DEMOX_CLOUD_FUNCTION_URL ||
-    "https://cb.aigc.sx.cn/cloudfunction/mcp-api";
+    "https://1307257815-ju8ahprgj9.ap-guangzhou.tencentscf.com";
+  const websiteApiUrl =
+    process.env.DEMOX_WEBSITE_API_URL ||
+    "https://1307257815-3empxtnzn9.ap-guangzhou.tencentscf.com";
 
   return {
     clientId,
@@ -29,6 +34,7 @@ export function loadConfig(): MCPConfig {
     apiBase,
     serverEnv,
     cloudFunctionUrl,
+    websiteApiUrl,
   };
 }
 

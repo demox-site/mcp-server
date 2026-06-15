@@ -11,7 +11,7 @@ import { OAuthManager } from "./auth/OAuthManager.js";
 import { DemoxClient } from "./api/DemoxClient.js";
 import { existsSync } from "fs";
 import { promises as fs } from "fs";
-import { dirname } from "path";
+import pathModule from "path";
 import { getTokenPath, logger } from "./utils/config.js";
 
 const program = new Command();
@@ -19,7 +19,7 @@ const program = new Command();
 program
   .name("demox-mcp")
   .description("Demox MCP Server CLI 工具")
-  .version("1.0.0");
+  .version("1.1.0");
 
 /**
  * 登录命令
@@ -156,9 +156,10 @@ program
  */
 program
   .command("deploy <path>")
-  .description("部署网站或目录")
+  .description("部署网站、目录、PDF 或文档")
   .option("-n, --name <name>", "网站名称")
   .option("-i, --id <id>", "网站 ID（更新现有网站）")
+  .option("-t, --template <template>", "文档模板：insight、warm、dark", "insight")
   .action(async (path: string, options) => {
     const oauthManager = new OAuthManager();
 
@@ -170,17 +171,19 @@ program
       const stat = await fs.stat(path);
       const isDirectory = stat.isDirectory();
       const isZipFile = stat.isFile() && path.endsWith(".zip");
+      const isFile = stat.isFile();
 
       let fileName = options.name;
 
       if (!fileName) {
         if (isDirectory) {
           // 目录：使用目录名
-          fileName = path.split("/").pop() || "unnamed";
+          fileName = pathModule.basename(path) || "unnamed";
           logger.info(`部署目录: ${path} → ${fileName}`);
-        } else if (isZipFile) {
-          // ZIP 文件：使用文件名（去掉 .zip 后缀）
-          fileName = path.split("/").pop()?.replace(".zip", "") || "unnamed";
+        } else if (isFile) {
+          // 文件：使用文件名（去掉扩展名）
+          const parsed = pathModule.parse(path);
+          fileName = parsed.name || (isZipFile ? "website" : "document");
           logger.info(`部署文件: ${path} → ${fileName}`);
         } else {
           fileName = "unnamed";
@@ -192,9 +195,10 @@ program
       // 直接传入路径，让 DemoxClient 自动处理
       const result = await client.deployWebsite(
         {
-          zipFile: path, // 可以是文件、目录或 base64
+          zipFile: path,
           websiteId: options.id,
           fileName,
+          templateId: options.template,
         },
         accessToken
       );
@@ -284,7 +288,7 @@ program
       mcpServers: {
         demox: {
           command: "npx",
-          args: ["-y", "@demox-site/mcp-server"]
+          args: ["-y", "@demox-site/mcp-server@latest"]
           // 配置已硬编码在代码中，无需 env 参数
         },
       },

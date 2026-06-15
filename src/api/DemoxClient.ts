@@ -1,13 +1,30 @@
 import { loadConfig, logger } from "../utils/config.js";
-import cloudbase from "@cloudbase/node-sdk";
+import {
+  buildDocumentSiteZip,
+  buildPdfSiteZip,
+  isSupportedDocPath,
+  isSupportedPdfPath,
+} from "../utils/site-packager.js";
+
+/**
+ * 鉴权错误类
+ * 当 token 过期或无效时抛出此错误，触发自动重新登录
+ */
+export class AuthError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "AuthError";
+  }
+}
 
 /**
  * 部署参数
  */
 export interface DeployParams {
-  zipFile: string; // base64 编码的 ZIP 文件内容或文件路径
+  zipFile: string;
   websiteId?: string;
   fileName: string;
+  templateId?: string;
 }
 
 /**
@@ -17,6 +34,10 @@ export interface DeployResult {
   url: string;
   websiteId: string;
   path: string;
+  defaultUrl?: string;
+  customUrl?: string | null;
+  preferredUrl?: string;
+  cachePurge?: unknown;
 }
 
 /**
@@ -25,69 +46,167 @@ export interface DeployResult {
 export interface Website {
   websiteId: string;
   fileName: string;
+  name?: string;
   url: string;
   path: string;
+  subdomain?: string | null;
+  defaultUrl?: string;
+  customUrl?: string | null;
+  preferredUrl?: string;
   createdAt: string;
   updatedAt: string;
 }
 
+export interface DomainCheckResult {
+  success: boolean;
+  available: boolean;
+  reason?: string;
+  message?: string;
+}
+
+export interface DomainResult {
+  success: boolean;
+  subdomain?: string;
+  url?: string;
+  message?: string;
+  code?: string;
+}
+
 /**
  * Demox API 客户端
- * 通过 mcp-api 云函数调用其他云函数
+ * 通过 SCF mcp-api 调用后端服务
  */
 export class DemoxClient {
-  private cloudFunctionUrl: string;
+  private apiUrl: string;
+  private websiteApiUrl: string;
 
   constructor(accessToken?: string) {
     const config = loadConfig();
-    this.cloudFunctionUrl = config.cloudFunctionUrl;
+    this.apiUrl = config.cloudFunctionUrl;
+    this.websiteApiUrl = config.websiteApiUrl;
   }
 
   /**
-   * 调用云函数（通过 mcp-api HTTP 代理）
+   * 调用 API
    */
-  private async callFunction(
-    name: string,
+  private async callApi(
+    path: string,
     data: Record<string, any>,
-    accessToken: string
+    accessToken: string,
+    baseUrl = this.apiUrl
   ): Promise<any> {
+    const https = await import("https");
+    const urlModule = await import("url");
+
     try {
-      logger.debug(`调用云函数: ${name}`);
+      logger.debug(`调用 API: ${path}`);
+      logger.debug(`API URL: ${this.apiUrl}`);
 
-      // 使用配置的云函数 URL
-      logger.debug(`API URL: ${this.cloudFunctionUrl}`);
+      const urlObj = new urlModule.URL(baseUrl + path);
+      const requestBodyStr = JSON.stringify(data);
 
-      const response = await fetch(this.cloudFunctionUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${accessToken}`,
-        },
-        body: JSON.stringify({
-          functionName: name,
-          data,
-        }),
+      const responseData = await new Promise<any>((resolve, reject) => {
+        const req = https.request(
+          {
+            hostname: urlObj.hostname,
+            port: urlObj.port || 443,
+            path: urlObj.pathname + urlObj.search,
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "Authorization": `Bearer ${accessToken}`,
+              "Content-Length": Buffer.byteLength(requestBodyStr),
+            },
+          },
+          (res: any) => {
+            let body = "";
+            res.on("data", (chunk: any) => {
+              body += chunk;
+            });
+            res.on("end", () => {
+              try {
+                const jsonResponse = JSON.parse(body);
+                resolve({
+                  ok: res.statusCode && res.statusCode >= 200 && res.statusCode < 300,
+                  status: res.statusCode,
+                  data: jsonResponse,
+                });
+              } catch (e) {
+                resolve({
+                  ok: res.statusCode && res.statusCode >= 200 && res.statusCode < 300,
+                  status: res.statusCode,
+                  data: body,
+                });
+              }
+            });
+          }
+        );
+
+        req.on("error", (err: Error) => {
+          reject(new Error(`请求失败: ${err.message}`));
+        });
+
+        req.write(requestBodyStr);
+        req.end();
       });
 
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`HTTP ${response.status}: ${errorText}`);
+      if (!responseData.ok) {
+        const errorText = typeof responseData.data === "string"
+          ? responseData.data
+          : JSON.stringify(responseData.data);
+
+        // 检查是否是鉴权错误
+        if (responseData.status === 401 ||
+            errorText.includes("UNAUTHORIZED") ||
+            errorText.includes("TOKEN_INVALID") ||
+            errorText.includes("AUTH_REQUIRED")) {
+          logger.error("鉴权失败，需要重新登录");
+          throw new AuthError("Token 已过期或无效，需要重新登录");
+        }
+
+        if (responseData.data && typeof responseData.data === "object" && responseData.data.message) {
+          const code = responseData.data.code ? `[${responseData.data.code}] ` : "";
+          throw new Error(`${code}${responseData.data.message}`);
+        }
+
+        throw new Error(`HTTP ${responseData.status}: ${errorText}`);
       }
 
-      const responseData = await response.json();
-
       // 检查错误
-      if (responseData && responseData.error) {
-        const error = responseData.error;
+      if (responseData.data && responseData.data.error) {
+        const error = responseData.data.error;
+
+        const authErrorCodes = [
+          "TOKEN_INVALID",
+          "AUTH_REQUIRED",
+          "AUTH_ERROR",
+          "UNAUTHORIZED",
+          "TOKEN_EXPIRED",
+          "NEED_LOGIN",
+        ];
+
+        if (authErrorCodes.includes(error.code)) {
+          logger.error(`鉴权错误 [${error.code}]: ${error.message}`);
+          throw new AuthError(error.message || "Token 已过期或无效");
+        }
+
         throw new Error(
           `[${error.code}] ${error.message}${error.suggestion ? `\n建议：${error.suggestion}` : ""
           }`
         );
       }
 
-      return responseData;
+      if (responseData.data && responseData.data.success === false) {
+        throw new Error(responseData.data.message || "请求失败");
+      }
+
+      return responseData.data;
     } catch (error: any) {
-      logger.error(`云函数调用失败 (${name}):`, error.message);
+      if (error instanceof AuthError) {
+        throw error;
+      }
+
+      logger.error(`API调用失败 (${path}):`, error.message);
       throw error;
     }
   }
@@ -99,6 +218,13 @@ export class DemoxClient {
     params: DeployParams,
     accessToken: string
   ): Promise<DeployResult> {
+    // 如果没有提供 websiteId，生成一个新的
+    let websiteId = params.websiteId;
+    if (!websiteId) {
+      websiteId = this.generateWebsiteId();
+      logger.debug(`自动生成 websiteId: ${websiteId}`);
+    }
+
     logger.info(`正在部署网站: ${params.fileName}`);
 
     // 处理输入路径（文件、目录或 URL），统一转换为本地 ZIP 文件
@@ -114,7 +240,7 @@ export class DemoxClient {
       const buffer = await this.downloadZipFileToBuffer(params.zipFile);
       localFilePath = await this.saveBufferToTempFile(buffer);
     } else if (this.isBase64(params.zipFile) && !params.zipFile.startsWith("/") && !params.zipFile.startsWith(".")) {
-      // Base64: 不再支持（无法验证文件类型）
+      // Base64: 不再支持
       throw new Error(`不支持直接传入 Base64 内容，请提供 ZIP 文件路径或 URL`);
     } else {
       // 本地路径：文件或目录
@@ -128,8 +254,18 @@ export class DemoxClient {
       } else if (params.zipFile.toLowerCase().endsWith(".zip")) {
         // ZIP 文件：直接使用
         localFilePath = params.zipFile;
+      } else if (isSupportedPdfPath(params.zipFile)) {
+        logger.debug(`检测到 PDF: ${params.zipFile}，正在生成预览站点...`);
+        const converted = await buildPdfSiteZip(params.zipFile);
+        localFilePath = converted.zipFilePath;
+        logger.info(`PDF 已转换为站点: ${converted.title}`);
+      } else if (isSupportedDocPath(params.zipFile)) {
+        logger.debug(`检测到文档: ${params.zipFile}，正在生成网页站点...`);
+        const converted = await buildDocumentSiteZip(params.zipFile, params.templateId);
+        localFilePath = converted.zipFilePath;
+        logger.info(`文档已转换为站点: ${converted.title}`);
       } else {
-        throw new Error(`不支持的文件类型，仅支持 .zip 文件或目录`);
+        throw new Error(`不支持的文件类型，仅支持目录、.zip、.pdf、.md、.txt、.docx 文件`);
       }
     }
 
@@ -141,33 +277,43 @@ export class DemoxClient {
     const fileSize = await this.getFileSize(localFilePath);
     logger.info(`文件大小: ${(fileSize / 1024 / 1024).toFixed(2)}MB`);
 
-    // 检查文件大小限制（最大 500MB，避免内存溢出）
-    const maxFileSize = 500 * 1024 * 1024; // 500MB
+    // 检查文件大小限制（最大 8MB，因为 SCF 请求体限制）
+    const maxFileSize = 8 * 1024 * 1024; // 8MB
     if (fileSize > maxFileSize) {
-      throw new Error(`文件过大 (${(fileSize / 1024 / 1024).toFixed(2)}MB)，当前最大支持 500MB`);
+      throw new Error(`文件过大 (${(fileSize / 1024 / 1024).toFixed(2)}MB)，当前最大支持 8MB`);
     }
 
-    // 一律使用 CloudBase Storage 上传
-    logger.info("正在上传文件到 CloudBase Storage...");
+    logger.info("正在部署网站...");
 
-    const fileId = await this.uploadToCloudBaseStorage(
-      localFilePath,
-      accessToken
-    );
+    // 读取文件并转为 base64
+    const fileContentBase64 = await this.readFileAsBase64(localFilePath);
 
-    const result = await this.callFunction(
-      "deploy-website",
+    // 调用新的 mcp-api /deploy 端点
+    const result = await this.callApi(
+      "/deploy",
       {
         action: "upload_and_deploy",
-        fileId,
-        websiteId: params.websiteId,
+        fileContentBase64,
         fileName: params.fileName,
+        websiteId,
       },
       accessToken
     );
 
     logger.info(`网站部署成功: ${result.url}`);
     return result;
+  }
+
+  /**
+   * 生成 8 位由大写字母与数字组成的随机 websiteId
+   */
+  private generateWebsiteId(): string {
+    const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    let out = "";
+    for (let i = 0; i < 8; i++) {
+      out += chars[Math.floor(Math.random() * chars.length)];
+    }
+    return out;
   }
 
   /**
@@ -242,52 +388,6 @@ export class DemoxClient {
   }
 
   /**
-   * 上传文件到 CloudBase Storage
-   */
-  private async uploadToCloudBaseStorage(
-    filePath: string,
-    accessToken: string
-  ): Promise<string> {
-    const config = loadConfig();
-
-    try {
-      const fs = await import("fs");
-      const pathModule = await import("path");
-
-      const fileName = pathModule.basename(filePath);
-      const cloudPath = `mcp-uploads/${Date.now()}-${fileName}`;
-
-      logger.info(`正在上传文件到 CloudBase Storage: ${cloudPath}`);
-
-      // 初始化 CloudBase
-      const app = cloudbase.init({
-        env: config.serverEnv,
-        accessToken,
-      });
-
-      // 使用 Stream 上传（避免内存溢出）
-      const fileStream = fs.createReadStream(filePath);
-
-      return new Promise((resolve, reject) => {
-        app.uploadFile({
-          cloudPath,
-          fileContent: fileStream,
-        }).then((result: any) => {
-          logger.info(`文件上传成功: ${result.fileID}`);
-          resolve(result.fileID);
-        }).catch((error: any) => {
-          logger.error("上传文件到 CloudBase Storage 失败:", error.message);
-          reject(new Error(`上传文件失败: ${error.message}`));
-        });
-      });
-    } catch (error: any) {
-      logger.error("上传文件到 CloudBase Storage 失败:", error.message);
-      logger.error("错误详情:", error);
-      throw new Error(`上传文件失败: ${error.message}`);
-    }
-  }
-
-  /**
    * 下载 ZIP 文件并保存为 Buffer
    */
   private async downloadZipFileToBuffer(url: string): Promise<Buffer> {
@@ -328,13 +428,42 @@ export class DemoxClient {
    * 检查字符串是否是 base64 编码
    */
   private isBase64(str: string): boolean {
-    // 简单的 base64 检测
     try {
       return btoa(atob(str)) === str;
     } catch (e) {
-      // 如果不是 base64，检查是否是本地路径
       return !str.includes("/") && !str.includes("\\") && str.length > 100;
     }
+  }
+
+  private buildDefaultUrl(websiteId: string): string {
+    return websiteId ? `https://${websiteId.toLowerCase()}.demox.site/` : "";
+  }
+
+  private buildCustomUrl(subdomain?: string | null): string | null {
+    const label = (subdomain || "").trim().toLowerCase();
+    return label ? `https://${label}.demox.site/` : null;
+  }
+
+  private mapMySQLToCamelCase(row: any): Website {
+    const websiteId = row.website_id || row.websiteId || "";
+    const subdomain = row.subdomain || null;
+    const defaultUrl = row.defaultUrl || row.default_url || this.buildDefaultUrl(websiteId);
+    const customUrl = row.customUrl || row.custom_url || this.buildCustomUrl(subdomain);
+    const preferredUrl = row.preferredUrl || row.preferred_url || customUrl || defaultUrl || row.url || "";
+
+    return {
+      websiteId,
+      fileName: row.file_name || row.fileName || "",
+      name: row.name || row.file_name || row.fileName || "",
+      path: row.path || "",
+      url: preferredUrl,
+      subdomain,
+      defaultUrl,
+      customUrl,
+      preferredUrl,
+      createdAt: row.created_at || row.createdAt || "",
+      updatedAt: row.updated_at || row.updatedAt || "",
+    };
   }
 
   /**
@@ -343,16 +472,14 @@ export class DemoxClient {
   async listWebsites(accessToken: string): Promise<Website[]> {
     logger.debug("获取网站列表");
 
-    const result = await this.callFunction(
-      "deploy-website",
-      {
-        action: "list",
-      },
+    const result = await this.callApi(
+      "/websites",
+      { action: "list" },
       accessToken
     );
 
-    // 云函数返回 { files: [...], count: n }
-    return result.files || [];
+    const rawWebsites = result.files || result.websites || [];
+    return rawWebsites.map((w: any) => this.mapMySQLToCamelCase(w));
   }
 
   /**
@@ -364,12 +491,9 @@ export class DemoxClient {
   ): Promise<void> {
     logger.info(`正在删除网站: ${websiteId}`);
 
-    await this.callFunction(
-      "deploy-website",
-      {
-        action: "delete",
-        websiteId,
-      },
+    await this.callApi(
+      "/delete",
+      { websiteId },
       accessToken
     );
 
@@ -385,37 +509,47 @@ export class DemoxClient {
   ): Promise<Website | null> {
     logger.debug(`获取网站详情: ${websiteId}`);
 
-    const result = await this.callFunction(
-      "deploy-website",
-      {
-        action: "get",
-        websiteId,
-      },
-      accessToken
-    );
-
-    return result.website || null;
+    // mcp-api 没有单独的 get 接口，从列表中查找
+    const websites = await this.listWebsites(accessToken);
+    return websites.find(w => w.websiteId === websiteId) || null;
   }
 
-  /**
-   * 下载 ZIP 文件并转换为 base64
-   */
-  private async downloadZipFile(url: string): Promise<string> {
-    try {
-      const response = await fetch(url);
-      if (!response.ok) {
-        throw new Error(`下载失败: ${response.statusText}`);
-      }
+  async checkSubdomain(
+    subdomain: string,
+    accessToken: string,
+    websiteId?: string
+  ): Promise<DomainCheckResult> {
+    return await this.callApi(
+      "/website/check-subdomain",
+      { action: "check_subdomain", subdomain, websiteId },
+      accessToken,
+      this.websiteApiUrl
+    );
+  }
 
-      const buffer = await response.arrayBuffer();
-      const base64 = Buffer.from(buffer).toString("base64");
+  async setSubdomain(
+    websiteId: string,
+    subdomain: string,
+    accessToken: string
+  ): Promise<DomainResult> {
+    return await this.callApi(
+      "/website/set-subdomain",
+      { action: "set_subdomain", websiteId, subdomain },
+      accessToken,
+      this.websiteApiUrl
+    );
+  }
 
-      logger.debug(`ZIP 文件下载成功，大小: ${buffer.byteLength} 字节`);
-      return base64;
-    } catch (error: any) {
-      logger.error("下载 ZIP 文件失败:", error.message);
-      throw error;
-    }
+  async clearSubdomain(
+    websiteId: string,
+    accessToken: string
+  ): Promise<DomainResult> {
+    return await this.callApi(
+      "/website/clear-subdomain",
+      { action: "clear_subdomain", websiteId },
+      accessToken,
+      this.websiteApiUrl
+    );
   }
 
   /**
@@ -423,15 +557,11 @@ export class DemoxClient {
    */
   async verifyToken(accessToken: string): Promise<boolean> {
     try {
-      await this.callFunction(
-        "oauth-token-manager",
-        {
-          action: "verify_token",
-          accessToken,
-        },
+      await this.callApi(
+        "/me",
+        {},
         accessToken
       );
-
       return true;
     } catch (error) {
       logger.error("Token 验证失败:", error);

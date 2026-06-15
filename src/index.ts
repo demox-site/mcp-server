@@ -7,7 +7,7 @@ import {
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import { OAuthManager } from "./auth/OAuthManager.js";
-import { DemoxClient } from "./api/DemoxClient.js";
+import { DemoxClient, AuthError } from "./api/DemoxClient.js";
 import { logger } from "./utils/config.js";
 
 /**
@@ -30,7 +30,7 @@ class DemoxMCPServer {
     this.server = new Server(
       {
         name: "@demox/mcp-server",
-        version: "1.0.0",
+        version: "1.1.0",
       },
       {
         capabilities: {
@@ -55,14 +55,14 @@ class DemoxMCPServer {
           {
             name: "deploy_website",
             description:
-              "部署静态网站到 Demox 平台。**仅支持 ZIP 文件或目录**，系统会自动上传到云存储并部署。",
+              "部署静态网站到 Demox 平台。支持目录、ZIP、PDF 和文档；PDF/文档会先转换为静态站点再部署。",
             inputSchema: {
               type: "object",
               properties: {
                 zipFile: {
                   type: "string",
                   description:
-                    "ZIP 文件路径或目录路径。支持：1) 本地 ZIP 文件（如 ./dist.zip） 2) 本地目录（如 ./dist）- 自动打包成 ZIP 3) HTTPS URL（必须以 .zip 结尾）。**不支持 base64 内容**。",
+                    "文件或目录路径。支持：1) 本地目录（自动打包）2) 本地 ZIP 3) PDF 4) .md/.markdown/.txt/.docx 文档 5) HTTPS ZIP URL。**不支持 base64 内容**。",
                 },
                 websiteId: {
                   type: "string",
@@ -72,6 +72,12 @@ class DemoxMCPServer {
                 fileName: {
                   type: "string",
                   description: "网站名称，用于标识和展示。如果不提供，会自动使用目录或文件名",
+                },
+                templateId: {
+                  type: "string",
+                  enum: ["insight", "warm", "dark"],
+                  description:
+                    "文档转网页时使用的模板，可选 insight、warm、dark。仅对文档文件生效，默认 insight",
                 },
               },
               required: ["zipFile"],
@@ -96,6 +102,60 @@ class DemoxMCPServer {
                 websiteId: {
                   type: "string",
                   description: "要查询的网站 ID",
+                },
+              },
+              required: ["websiteId"],
+            },
+          },
+          {
+            name: "check_custom_domain",
+            description:
+              "检查自定义子域名前缀是否可用，域名格式为 <subdomain>.demox.site",
+            inputSchema: {
+              type: "object",
+              properties: {
+                subdomain: {
+                  type: "string",
+                  description: "要检查的子域名前缀，例如 my-demo",
+                },
+                websiteId: {
+                  type: "string",
+                  description:
+                    "当前网站 ID（可选）。传入后，如果该前缀已绑定到自己，也会视为可用",
+                },
+              },
+              required: ["subdomain"],
+            },
+          },
+          {
+            name: "set_custom_domain",
+            description:
+              "为指定网站设置自定义子域名前缀。设置后优先展示自定义域名。",
+            inputSchema: {
+              type: "object",
+              properties: {
+                websiteId: {
+                  type: "string",
+                  description: "要设置自定义域名的网站 ID",
+                },
+                subdomain: {
+                  type: "string",
+                  description: "子域名前缀，例如 my-demo，对应 my-demo.demox.site",
+                },
+              },
+              required: ["websiteId", "subdomain"],
+            },
+          },
+          {
+            name: "clear_custom_domain",
+            description:
+              "清除指定网站的自定义子域名前缀，网站仍可通过默认域名访问。",
+            inputSchema: {
+              type: "object",
+              properties: {
+                websiteId: {
+                  type: "string",
+                  description: "要清除自定义域名的网站 ID",
                 },
               },
               required: ["websiteId"],
@@ -141,6 +201,12 @@ class DemoxMCPServer {
             return await this.handleList(accessToken);
           case "get_website":
             return await this.handleGet(args, accessToken);
+          case "check_custom_domain":
+            return await this.handleCheckCustomDomain(args, accessToken);
+          case "set_custom_domain":
+            return await this.handleSetCustomDomain(args, accessToken);
+          case "clear_custom_domain":
+            return await this.handleClearCustomDomain(args, accessToken);
           case "delete_website":
             return await this.handleDelete(args, accessToken);
           default:
@@ -149,8 +215,9 @@ class DemoxMCPServer {
       } catch (error: any) {
         logger.error(`工具调用失败 (${name}):`, error.message);
 
-        // 检查是否是认证错误
-        const isAuthError = error.message.includes("Token") ||
+        // 检查是否是 AuthError 实例或包含认证相关的错误信息
+        const isAuthError = error.name === "AuthError" ||
+                            error.message.includes("Token") ||
                             error.message.includes("认证") ||
                             error.message.includes("登录") ||
                             error.message.includes("UNAUTHORIZED") ||
@@ -176,6 +243,12 @@ class DemoxMCPServer {
                 return await this.handleList(newAccessToken);
               case "get_website":
                 return await this.handleGet(args, newAccessToken);
+              case "check_custom_domain":
+                return await this.handleCheckCustomDomain(args, newAccessToken);
+              case "set_custom_domain":
+                return await this.handleSetCustomDomain(args, newAccessToken);
+              case "clear_custom_domain":
+                return await this.handleClearCustomDomain(args, newAccessToken);
               case "delete_website":
                 return await this.handleDelete(args, newAccessToken);
               default:
@@ -222,7 +295,7 @@ demox-mcp login
    * 处理网站部署
    */
   private async handleDeploy(args: any, accessToken: string) {
-    const { zipFile, websiteId, fileName: providedFileName } = args;
+    const { zipFile, websiteId, fileName: providedFileName, templateId } = args;
 
     // 参数验证
     if (!zipFile) {
@@ -250,6 +323,7 @@ demox-mcp login
           zipFile,
           websiteId,
           fileName,
+          templateId,
         },
         accessToken
       );
@@ -263,7 +337,7 @@ demox-mcp login
 **网站名称**: ${fileName}
 **网站 ID**: ${result.websiteId}
 **访问地址**: ${result.url}
-**部署路径**: ${result.path}
+${result.customUrl && result.defaultUrl && result.customUrl !== result.defaultUrl ? `**默认域名**: ${result.defaultUrl}\n` : ""}**部署路径**: ${result.path}
 
 您现在可以访问上述地址查看您的网站了。`,
           },
@@ -302,7 +376,7 @@ demox-mcp login
         return `${index + 1}. **${site.fileName}**
    - ID: \`${site.websiteId}\`
    - URL: ${site.url}
-   - 创建时间: ${date}
+${site.customUrl && site.defaultUrl && site.customUrl !== site.defaultUrl ? `   - 默认域名: ${site.defaultUrl}\n` : ""}   - 创建时间: ${date}
 `;
       })
       .join("\n");
@@ -359,9 +433,107 @@ ${listText}`,
 **名称**: ${website.fileName}
 **ID**: \`${website.websiteId}\`
 **URL**: ${website.url}
-**路径**: ${website.path}
+${website.customUrl && website.defaultUrl && website.customUrl !== website.defaultUrl ? `**默认域名**: ${website.defaultUrl}\n` : ""}**路径**: ${website.path}
 **创建时间**: ${createdDate}
 **更新时间**: ${updatedDate}`,
+        },
+      ],
+    };
+  }
+
+  /**
+   * 处理自定义域名可用性检查
+   */
+  private async handleCheckCustomDomain(args: any, accessToken: string) {
+    const { subdomain, websiteId } = args;
+
+    if (!subdomain) {
+      throw new Error("缺少必需参数: subdomain");
+    }
+
+    const result = await this.demoxClient!.checkSubdomain(
+      subdomain,
+      accessToken,
+      websiteId
+    );
+    const host = `${subdomain}.demox.site`;
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: result.available
+            ? `✅ **${host}** 可用`
+            : `⚠️ **${host}** 不可用\n\n原因: ${result.message || result.reason || "未知"}`,
+        },
+      ],
+    };
+  }
+
+  /**
+   * 处理设置自定义域名
+   */
+  private async handleSetCustomDomain(args: any, accessToken: string) {
+    const { websiteId, subdomain } = args;
+
+    if (!websiteId) {
+      throw new Error("缺少必需参数: websiteId");
+    }
+    if (!subdomain) {
+      throw new Error("缺少必需参数: subdomain");
+    }
+
+    const result = await this.demoxClient!.setSubdomain(
+      websiteId,
+      subdomain,
+      accessToken
+    );
+
+    if (!result.success) {
+      throw new Error(result.message || "设置自定义域名失败");
+    }
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: `✅ 自定义域名已设置
+
+**网站 ID**: \`${websiteId}\`
+**访问地址**: ${result.url || `https://${subdomain}.demox.site/`}
+${result.message ? `**提示**: ${result.message}` : ""}`,
+        },
+      ],
+    };
+  }
+
+  /**
+   * 处理清除自定义域名
+   */
+  private async handleClearCustomDomain(args: any, accessToken: string) {
+    const { websiteId } = args;
+
+    if (!websiteId) {
+      throw new Error("缺少必需参数: websiteId");
+    }
+
+    const result = await this.demoxClient!.clearSubdomain(
+      websiteId,
+      accessToken
+    );
+
+    if (!result.success) {
+      throw new Error(result.message || "清除自定义域名失败");
+    }
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: `✅ 自定义域名已清除
+
+**网站 ID**: \`${websiteId}\`
+${result.message ? `**提示**: ${result.message}` : ""}`,
         },
       ],
     };

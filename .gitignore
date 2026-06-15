@@ -6,3 +6,5 @@ dist/
 *.tsbuildinfo
 coverage/
 .npmrc
+test-token.json
+*token*.json
