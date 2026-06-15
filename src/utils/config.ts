@@ -11,6 +11,7 @@ export interface MCPConfig {
   apiBase: string;
   serverEnv: string;
   cloudFunctionUrl: string;
+  websiteApiUrl: string;
 }
 
 export function loadConfig(): MCPConfig {
@@ -23,6 +24,9 @@ export function loadConfig(): MCPConfig {
   const cloudFunctionUrl =
     process.env.DEMOX_CLOUD_FUNCTION_URL ||
     "https://1307257815-ju8ahprgj9.ap-guangzhou.tencentscf.com";
+  const websiteApiUrl =
+    process.env.DEMOX_WEBSITE_API_URL ||
+    "https://1307257815-3empxtnzn9.ap-guangzhou.tencentscf.com";
 
   return {
     clientId,
@@ -30,6 +34,7 @@ export function loadConfig(): MCPConfig {
     apiBase,
     serverEnv,
     cloudFunctionUrl,
+    websiteApiUrl,
   };
 }
 
