@@ -14,7 +14,8 @@
     "cli": "tsx src/cli.ts",
     "test": "vitest",
     "prepublishOnly": "npm run build",
-    "lint": "eslint \"src/**/*.ts\""
+    "lint": "eslint \"src/**/*.ts\"",
+    "prepare": "npm run build"
   },
   "keywords": [
     "mcp",
