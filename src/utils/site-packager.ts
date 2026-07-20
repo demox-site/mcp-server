@@ -75,6 +75,48 @@ function applyInlineMarkdown(input: string): string {
       (_match, text, url) =>
         `<a href="${escapeAttr(url)}" target="_blank" rel="noopener">${text}</a>`
     );
+}function isMarkdownTableRow(line: string): boolean {
+  const trimmed = line.trim();
+  return trimmed.includes("|") && /^\|?.+\|.+\|?$/.test(trimmed);
+}
+
+function isMarkdownTableDelimiter(line: string): boolean {
+  const cells = splitMarkdownTableRow(line);
+  return cells.length > 0 && cells.every((cell) => /^:?-{3,}:?$/.test(cell.trim()));
+}
+
+function splitMarkdownTableRow(line: string): string[] {
+  let trimmed = line.trim();
+  if (trimmed.startsWith("|")) trimmed = trimmed.slice(1);
+  if (trimmed.endsWith("|")) trimmed = trimmed.slice(0, -1);
+  return trimmed.split("|").map((cell) => cell.trim());
+}
+
+function tableAlignments(delimiterLine: string): Array<"left" | "center" | "right" | undefined> {
+  return splitMarkdownTableRow(delimiterLine).map((cell) => {
+    const trimmed = cell.trim();
+    if (trimmed.startsWith(":") && trimmed.endsWith(":")) return "center";
+    if (trimmed.endsWith(":")) return "right";
+    return undefined;
+  });
+}
+
+function renderTableCell(tag: "th" | "td", value: string, align?: "left" | "center" | "right"): string {
+  const alignAttr = align ? ` style="text-align:${align}"` : "";
+  return `<${tag}${alignAttr}>${applyInlineMarkdown(value)}</${tag}>`;
+}
+
+function renderMarkdownTable(headerLine: string, delimiterLine: string, bodyLines: string[]): string {
+  const headers = splitMarkdownTableRow(headerLine);
+  const aligns = tableAlignments(delimiterLine);
+  const thead = `<thead><tr>${headers.map((cell, index) => renderTableCell("th", cell, aligns[index])).join("")}</tr></thead>`;
+  const rows = bodyLines
+    .map((line) => {
+      const cells = splitMarkdownTableRow(line);
+      return `<tr>${headers.map((_header, index) => renderTableCell("td", cells[index] || "", aligns[index])).join("")}</tr>`;
+    })
+    .join("");
+  return `<table>${thead}${rows ? `<tbody>${rows}</tbody>` : ""}</table>`;
 }
 
 function markdownToHtml(markdown: string): string {
@@ -97,7 +139,8 @@ function markdownToHtml(markdown: string): string {
     listItems = [];
   };
 
-  for (const line of lines) {
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i];
     const trimmed = line.trim();
 
     if (trimmed.startsWith("```")) {
@@ -121,6 +164,28 @@ function markdownToHtml(markdown: string): string {
     if (!trimmed) {
       flushParagraph();
       flushList();
+      continue;
+    }
+
+    if (/^(?:-{3,}|\*{3,}|_{3,})$/.test(trimmed)) {
+      flushParagraph();
+      flushList();
+      html.push("<hr />");
+      continue;
+    }
+
+    if (isMarkdownTableRow(trimmed) && lines[i + 1] && isMarkdownTableDelimiter(lines[i + 1])) {
+      flushParagraph();
+      flushList();
+      const delimiterLine = lines[i + 1];
+      const bodyLines: string[] = [];
+      i += 2;
+      while (i < lines.length && isMarkdownTableRow(lines[i]) && !isMarkdownTableDelimiter(lines[i])) {
+        bodyLines.push(lines[i]);
+        i += 1;
+      }
+      i -= 1;
+      html.push(renderMarkdownTable(trimmed, delimiterLine, bodyLines));
       continue;
     }
 
@@ -229,6 +294,10 @@ a { color: var(--accent); }
 blockquote { margin: 1.5rem 0; padding: .3rem 1rem; border-left: 4px solid var(--accent); background: var(--card); color: var(--muted); }
 code { background: var(--card); padding: .15rem .35rem; border-radius: 4px; }
 pre { background: var(--card); padding: 1rem; overflow-x: auto; border: 1px solid var(--border); border-radius: 10px; }
+hr { border: 0; border-top: 1px solid var(--border); margin: 2.5rem 0; }
+table { width: 100%; border-collapse: collapse; margin: 1.5rem 0; font-size: .95em; display: block; overflow-x: auto; }
+th, td { border: 1px solid var(--border); padding: .55rem .8rem; text-align: left; vertical-align: top; }
+th { background: var(--card); color: var(--heading); font-weight: 700; }
 img { max-width: 100%; height: auto; }
 footer { margin-top: 4rem; padding-top: 1rem; border-top: 1px solid var(--border); color: var(--muted); font-size: .85rem; }
 </style>
