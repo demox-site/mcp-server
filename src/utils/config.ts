@@ -15,37 +15,40 @@ export interface MCPConfig {
   websiteApiUrl: string;
 }
 
+const DEFAULT_CLIENT_ID = "demox-mcp-client";
+const DEFAULT_SITE_URL = "https://www.demox.site";
+const DEFAULT_API_URL = "https://api.demox.site";
+const DEFAULT_SERVER_ENV = "demox-scf";
+
 function optionalEnv(name: string): string {
   return (process.env[name] || "").trim();
-}
-
-function requireEnv(name: string): string {
-  const value = optionalEnv(name);
-  if (!value) {
-    throw new Error(`Missing required environment variable: ${name}`);
-  }
-  return stripTrailingSlash(value);
 }
 
 function stripTrailingSlash(value: string): string {
   return value.replace(/\/+$/, "");
 }
 
+function defaultAuthUrl(siteUrl: string): string {
+  // The public apex is redirect-only; open OAuth directly on the canonical host.
+  const authSiteUrl = siteUrl === "https://demox.site"
+    ? "https://www.demox.site"
+    : siteUrl;
+  return `${authSiteUrl}/mcp-authorize`;
+}
+
 export function loadConfig(): MCPConfig {
-  const clientId = process.env.DEMOX_CLIENT_ID || "demox-mcp-client";
-  const siteUrl = requireEnv("DEMOX_SITE_URL");
+  const clientId = optionalEnv("DEMOX_CLIENT_ID") || DEFAULT_CLIENT_ID;
+  const siteUrl = stripTrailingSlash(optionalEnv("DEMOX_SITE_URL") || DEFAULT_SITE_URL);
   const authUrl =
-    stripTrailingSlash(optionalEnv("DEMOX_AUTH_URL") || `${siteUrl}/mcp-authorize`);
+    stripTrailingSlash(optionalEnv("DEMOX_AUTH_URL") || defaultAuthUrl(siteUrl));
   const apiBase = stripTrailingSlash(optionalEnv("DEMOX_API_BASE") || siteUrl);
-  const serverEnv = process.env.DEMOX_SERVER_ENV || "demox-scf";
+  const serverEnv = optionalEnv("DEMOX_SERVER_ENV") || DEFAULT_SERVER_ENV;
   const apiUrl = stripTrailingSlash(
     optionalEnv("DEMOX_API_URL") ||
     optionalEnv("DEMOX_CLOUD_FUNCTION_URL") ||
-    optionalEnv("DEMOX_WEBSITE_API_URL")
+    optionalEnv("DEMOX_WEBSITE_API_URL") ||
+    DEFAULT_API_URL
   );
-  if (!apiUrl) {
-    throw new Error("Missing required environment variable: DEMOX_API_URL");
-  }
   const cloudFunctionUrl = stripTrailingSlash(optionalEnv("DEMOX_CLOUD_FUNCTION_URL") || apiUrl);
   const websiteApiUrl = stripTrailingSlash(optionalEnv("DEMOX_WEBSITE_API_URL") || apiUrl);
 

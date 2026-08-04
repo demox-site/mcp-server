@@ -47,17 +47,13 @@ MCP (Model Context Protocol) 是 AI 助手与工具之间的标准化协议，�
   "mcpServers": {
     "demox": {
       "command": "npx",
-      "args": ["-y", "@demox-site/mcp-server@latest"],
-      "env": {
-        "DEMOX_SITE_URL": "<your-demox-site-url>",
-        "DEMOX_API_URL": "<your-demox-api-url>"
-      }
+      "args": ["-y", "@demox-site/mcp-server@latest"]
     }
   }
 }
 ```
 
-配置后重启 AI 工具，首次使用时会自动打开浏览器登录。
+无需配置环境变量。配置后重启 AI 工具，首次使用时会自动打开浏览器登录。
 
 ---
 
@@ -90,11 +86,7 @@ MCP (Model Context Protocol) 是 AI 助手与工具之间的标准化协议，�
   "mcpServers": {
     "demox": {
       "command": "npx",
-      "args": ["-y", "@demox-site/mcp-server@latest"],
-      "env": {
-        "DEMOX_SITE_URL": "<your-demox-site-url>",
-        "DEMOX_API_URL": "<your-demox-api-url>"
-      }
+      "args": ["-y", "@demox-site/mcp-server@latest"]
     }
   }
 }
