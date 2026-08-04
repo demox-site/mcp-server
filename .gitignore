@@ -5,6 +5,7 @@ dist/
 .env
 *.tsbuildinfo
 coverage/
+.claude/
 .npmrc
 test-token.json
 *token*.json

@@ -242,18 +242,87 @@ function extractTitleFromHtml(html: string): string {
   return match[1].replace(/<[^>]+>/g, "").trim();
 }
 
+function stripTags(html: string): string {
+  return String(html || "").replace(/<[^>]+>/g, "").trim();
+}
+
+function slugifyHeading(text: string): string {
+  const slug = String(text || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "-")
+    .replace(/[^\w\u4e00-\u9fff-]+/g, "")
+    .replace(/-+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return slug || "section";
+}
+
+/** 给正文标题补 id，并生成目录 HTML（与 Web 端行为一致） */
+function enrichBodyWithToc(html: string): { bodyHtml: string; tocHtml: string } {
+  const used = new Set<string>();
+  const items: Array<{ level: number; text: string; id: string }> = [];
+
+  const uniqueSlug = (text: string) => {
+    const base = slugifyHeading(text);
+    let slug = base;
+    let i = 2;
+    while (used.has(slug)) slug = `${base}-${i++}`;
+    used.add(slug);
+    return slug;
+  };
+
+  const bodyHtml = String(html || "").replace(
+    /<h([1-6])(\s[^>]*)?>([\s\S]*?)<\/h\1>/gi,
+    (match, levelStr: string, attrs = "", inner: string) => {
+      const text = stripTags(inner);
+      if (!text) return match;
+
+      const existing = /\sid\s*=\s*["']([^"']+)["']/i.exec(attrs || "");
+      let id: string;
+      if (existing) {
+        id = existing[1];
+        used.add(id);
+      } else {
+        id = uniqueSlug(text);
+      }
+
+      items.push({ level: Number(levelStr), text, id });
+      if (existing) return match;
+      return `<h${levelStr}${attrs} id="${id}">${inner}</h${levelStr}>`;
+    }
+  );
+
+  let tocItems = items;
+  if (tocItems.length && tocItems[0].level === 1) tocItems = tocItems.slice(1);
+  if (tocItems.length < 2) return { bodyHtml, tocHtml: "" };
+
+  const minLevel = Math.min(...tocItems.map((item) => item.level));
+  const tocHtml = `<ul class="doc-toc-list">
+${tocItems
+  .map(
+    (item) =>
+      `<li class="doc-toc-item level-${item.level - minLevel}"><a href="#${escapeAttr(item.id)}">${escapeHtml(item.text)}</a></li>`
+  )
+  .join("\n")}
+</ul>`;
+
+  return { bodyHtml, tocHtml };
+}
+
 function normalizeTemplateId(templateId?: string): DocTemplateId {
   return DOC_TEMPLATE_IDS.includes(templateId as DocTemplateId)
     ? (templateId as DocTemplateId)
     : "insight";
 }
 
-function renderDocHtml({ title, bodyHtml, templateId }: {
+function renderDocHtml({ title, bodyHtml, tocHtml = "", templateId }: {
   title: string;
   bodyHtml: string;
+  tocHtml?: string;
   templateId?: string;
 }): string {
   const template = normalizeTemplateId(templateId);
+  const hasToc = Boolean(tocHtml);
   const themes: Record<DocTemplateId, string> = {
     insight: `
       --bg:#ffffff; --fg:#27272a; --heading:#18181b; --muted:#71717a;
@@ -266,6 +335,47 @@ function renderDocHtml({ title, bodyHtml, templateId }: {
       --border:#27272a; --accent:#a3e635; --card:#18181b; --font: "IBM Plex Sans", "Avenir Next", "PingFang SC", sans-serif;`
   };
 
+  const tocBlock = hasToc
+    ? `<aside class="doc-toc" aria-label="目录">
+<details class="doc-toc-panel" open>
+<summary class="doc-toc-summary">目录</summary>
+<nav class="doc-toc-nav">
+<p class="doc-toc-label">目录</p>
+${tocHtml}
+</nav>
+</details>
+</aside>`
+    : "";
+
+  const tocScript = hasToc
+    ? `<script>
+(function () {
+  var links = document.querySelectorAll(".doc-toc-list a");
+  if (!links.length) return;
+  var map = [];
+  links.forEach(function (a) {
+    var href = a.getAttribute("href") || "";
+    if (href.charAt(0) !== "#") return;
+    var el = document.getElementById(decodeURIComponent(href.slice(1)));
+    if (el) map.push({ el: el, a: a });
+  });
+  if (!map.length) return;
+  function onScroll() {
+    var y = window.scrollY + 96;
+    var current = map[0].a;
+    for (var i = 0; i < map.length; i++) {
+      if (map[i].el.offsetTop <= y) current = map[i].a;
+    }
+    links.forEach(function (a) {
+      a.classList.toggle("is-active", a === current);
+    });
+  }
+  window.addEventListener("scroll", onScroll, { passive: true });
+  onScroll();
+})();
+</script>`
+    : "";
+
   return `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -275,6 +385,7 @@ function renderDocHtml({ title, bodyHtml, templateId }: {
 <style>
 :root { ${themes[template]} }
 * { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
 body {
   margin: 0;
   font-family: var(--font);
@@ -282,12 +393,14 @@ body {
   color: var(--fg);
   background: var(--bg);
 }
-main {
+.doc-layout {
   max-width: 760px;
   margin: 0 auto;
   padding: clamp(2.5rem, 6vw, 5rem) clamp(1.2rem, 5vw, 2rem) 4rem;
 }
-h1, h2, h3, h4, h5, h6 { color: var(--heading); line-height: 1.25; }
+.has-toc .doc-layout { max-width: calc(760px + 14rem); }
+.doc { min-width: 0; }
+h1, h2, h3, h4, h5, h6 { color: var(--heading); line-height: 1.25; scroll-margin-top: 1.25rem; }
 .doc-title { font-size: clamp(2rem, 5vw, 3rem); margin: 0 0 2rem; letter-spacing: -0.03em; }
 article h2 { border-bottom: 1px solid var(--border); padding-bottom: .35rem; }
 a { color: var(--accent); }
@@ -300,16 +413,43 @@ th, td { border: 1px solid var(--border); padding: .55rem .8rem; text-align: lef
 th { background: var(--card); color: var(--heading); font-weight: 700; }
 img { max-width: 100%; height: auto; }
 footer { margin-top: 4rem; padding-top: 1rem; border-top: 1px solid var(--border); color: var(--muted); font-size: .85rem; }
+.doc-toc { margin: 0 0 1.75rem; }
+.doc-toc-panel { border: 1px solid var(--border); border-radius: 10px; background: var(--card); padding: .15rem .9rem .75rem; }
+.doc-toc-summary { cursor: pointer; list-style: none; font-size: .85rem; font-weight: 650; color: var(--heading); padding: .7rem 0 .35rem; user-select: none; }
+.doc-toc-summary::-webkit-details-marker { display: none; }
+.doc-toc-summary::before { content: "›"; display: inline-block; margin-right: .45rem; color: var(--muted); }
+.doc-toc-panel[open] > .doc-toc-summary::before { transform: rotate(90deg); }
+.doc-toc-label { display: none; margin: 0 0 .65rem; font-size: .72rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.doc-toc-list { list-style: none; margin: 0; padding: 0; }
+.doc-toc-item { margin: 0; }
+.doc-toc-item a { display: block; padding: .28rem 0 .28rem .65rem; font-size: .9rem; line-height: 1.4; color: var(--muted); text-decoration: none; border-left: 2px solid transparent; }
+.doc-toc-item a:hover { color: var(--heading); }
+.doc-toc-item a.is-active { color: var(--heading); border-left-color: var(--accent); font-weight: 600; }
+.doc-toc-item.level-1 a { padding-left: 1.25rem; font-size: .86rem; }
+.doc-toc-item.level-2 a { padding-left: 1.85rem; font-size: .84rem; }
+.doc-toc-item.level-3 a, .doc-toc-item.level-4 a, .doc-toc-item.level-5 a { padding-left: 2.4rem; font-size: .82rem; }
+@media (min-width: 1100px) {
+  .has-toc .doc-layout { display: grid; grid-template-columns: 12.5rem minmax(0, 760px); gap: 2.5rem; align-items: start; justify-content: center; }
+  .doc-toc { margin: 0; position: sticky; top: 2rem; max-height: calc(100vh - 4rem); overflow: auto; }
+  .doc-toc-panel { border: none; background: transparent; border-radius: 0; padding: 0; }
+  .doc-toc-summary { display: none; }
+  .doc-toc-label { display: block; }
+  .doc-toc-nav { display: block !important; }
+}
 </style>
 </head>
-<body>
-<main>
+<body class="${hasToc ? "has-toc" : ""}">
+<div class="doc-layout">
+${tocBlock}
+<main class="doc">
 <h1 class="doc-title">${escapeHtml(title)}</h1>
 <article>
 ${bodyHtml}
 </article>
 <footer>由 <a href="https://demox.site" target="_blank" rel="noopener">demox</a> 部署</footer>
 </main>
+</div>
+${tocScript}
 </body>
 </html>`;
 }
@@ -366,9 +506,10 @@ export async function buildDocumentSiteZip(filePath: string, templateId?: string
     throw new Error("不支持的文档格式");
   }
 
-  const bodyHtml = sanitizeHtml(rawHtml);
-  const title = extractTitleFromHtml(bodyHtml) || stripExt(filePath) || "document";
-  const html = renderDocHtml({ title, bodyHtml, templateId });
+  const cleaned = sanitizeHtml(rawHtml);
+  const title = extractTitleFromHtml(cleaned) || stripExt(filePath) || "document";
+  const { bodyHtml, tocHtml } = enrichBodyWithToc(cleaned);
+  const html = renderDocHtml({ title, bodyHtml, tocHtml, templateId });
   const zip = new AdmZip();
   (zip as any).addFile("index.html", Buffer.from(html, "utf8"));
 

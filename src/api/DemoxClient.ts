@@ -5,6 +5,7 @@ import {
   isSupportedDocPath,
   isSupportedPdfPath,
 } from "../utils/site-packager.js";
+import { uploadFileInChunks } from "../utils/chunked-upload.js";
 
 /**
  * 鉴权错误类
@@ -295,33 +296,19 @@ export class DemoxClient {
       throw new Error(`无法处理输入文件`);
     }
 
-    // 显示文件大小并检查限制
+    // 显示文件大小；最终大小限制由后端角色配额统一校验。
     const fileSize = await this.getFileSize(localFilePath);
     logger.info(`文件大小: ${(fileSize / 1024 / 1024).toFixed(2)}MB`);
 
-    // 检查文件大小限制（最大 8MB，因为 SCF 请求体限制）
-    const maxFileSize = 8 * 1024 * 1024; // 8MB
-    if (fileSize > maxFileSize) {
-      throw new Error(`文件过大 (${(fileSize / 1024 / 1024).toFixed(2)}MB)，当前最大支持 8MB`);
-    }
-
     logger.info("正在部署网站...");
-
-    // 读取文件并转为 base64
-    const fileContentBase64 = await this.readFileAsBase64(localFilePath);
-
-    // 调用新的 mcp-api /deploy 端点
-    const result = await this.callApi(
-      "/deploy",
-      {
-        action: "upload_and_deploy",
-        fileContentBase64,
-        fileName: params.fileName,
-        websiteId,
-        projectId: params.projectId,
-      },
-      accessToken
-    );
+    const result = await uploadFileInChunks({
+      filePath: localFilePath,
+      fileName: params.fileName,
+      websiteId,
+      projectId: params.projectId,
+      callApi: (payload) => this.callApi("/deploy", payload, accessToken),
+      onProgress: (uploaded, total) => logger.info(`上传分块: ${uploaded}/${total}`)
+    });
 
     logger.info(`网站部署成功: ${result.url}`);
     return result;
@@ -365,22 +352,6 @@ export class DemoxClient {
   private async getFileSize(filePath: string): Promise<number> {
     const stat = await this.getPathStat(filePath);
     return stat.size;
-  }
-
-  /**
-   * 读取文件为 base64
-   */
-  private async readFileAsBase64(filePath: string): Promise<string> {
-    const fs = await import("fs");
-
-    try {
-      const buffer = fs.readFileSync(filePath);
-      const base64 = buffer.toString("base64");
-      logger.debug(`文件读取成功，大小: ${buffer.length} 字节`);
-      return base64;
-    } catch (error: any) {
-      throw new Error(`读取文件失败: ${error.message}`);
-    }
   }
 
   /**
