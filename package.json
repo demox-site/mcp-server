@@ -1,7 +1,7 @@
 {
   "name": "@demox-site/mcp-server",
-  "version": "1.1.3",
-  "description": "Demox MCP Server - Deploy static websites with AI",
+  "version": "1.1.4",
+  "description": "Demox MCP Server - Deploy static websites and manage project databases with AI",
   "main": "./dist/index.js",
   "type": "module",
   "bin": {
