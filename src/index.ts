@@ -207,6 +207,137 @@ class DemoxMCPServer {
               required: ["websiteId"],
             },
           },
+          {
+            name: "create_project",
+            description:
+              "创建 Demox 项目。普通用户默认最多 3 个未归档自有项目；超出返回 quota。",
+            inputSchema: {
+              type: "object",
+              properties: {
+                name: { type: "string", description: "项目名称" },
+                slug: { type: "string", description: "项目 slug（可选）" },
+                description: { type: "string", description: "项目描述（可选）" },
+              },
+              required: ["name"],
+            },
+          },
+          {
+            name: "list_project_tables",
+            description:
+              "列出项目数据库中的表，并返回用量（bytesUsed / bytesLimit，默认每项目 100MB）。",
+            inputSchema: {
+              type: "object",
+              properties: {
+                projectId: { type: "string", description: "项目 ID" },
+              },
+              required: ["projectId"],
+            },
+          },
+          {
+            name: "create_project_table",
+            description:
+              "在项目数据库中建表。列类型仅 text/number/boolean，且必须正好一个 text 主键。",
+            inputSchema: {
+              type: "object",
+              properties: {
+                projectId: { type: "string", description: "项目 ID" },
+                name: { type: "string", description: "表名（小写字母开头）" },
+                columns: {
+                  type: "array",
+                  description: "列定义",
+                  items: {
+                    type: "object",
+                    properties: {
+                      name: { type: "string" },
+                      type: { type: "string", enum: ["text", "number", "boolean"] },
+                      primary: { type: "boolean" },
+                    },
+                    required: ["name", "type"],
+                  },
+                },
+              },
+              required: ["projectId", "name", "columns"],
+            },
+          },
+          {
+            name: "get_project_table",
+            description: "获取项目数据库中一张表的结构与行数。",
+            inputSchema: {
+              type: "object",
+              properties: {
+                projectId: { type: "string" },
+                table: { type: "string", description: "表名" },
+              },
+              required: ["projectId", "table"],
+            },
+          },
+          {
+            name: "delete_project_table",
+            description: "删除项目数据库中的表及其全部行。不可撤销。",
+            inputSchema: {
+              type: "object",
+              properties: {
+                projectId: { type: "string" },
+                table: { type: "string" },
+              },
+              required: ["projectId", "table"],
+            },
+          },
+          {
+            name: "list_project_rows",
+            description: "分页列出项目数据库表中的行。",
+            inputSchema: {
+              type: "object",
+              properties: {
+                projectId: { type: "string" },
+                table: { type: "string" },
+                limit: { type: "number", description: "每页行数，默认 50，最大 100" },
+                after: { type: "string", description: "上一页最后一行主键" },
+              },
+              required: ["projectId", "table"],
+            },
+          },
+          {
+            name: "put_project_row",
+            description:
+              "按主键写入或覆盖一行。超过项目数据库容量（默认 100MB）时返回 quota。",
+            inputSchema: {
+              type: "object",
+              properties: {
+                projectId: { type: "string" },
+                table: { type: "string" },
+                values: {
+                  type: "object",
+                  description: "行字段，必须包含主键列",
+                },
+              },
+              required: ["projectId", "table", "values"],
+            },
+          },
+          {
+            name: "delete_project_row",
+            description: "按主键删除一行。",
+            inputSchema: {
+              type: "object",
+              properties: {
+                projectId: { type: "string" },
+                table: { type: "string" },
+                pk: { type: "string", description: "主键值" },
+              },
+              required: ["projectId", "table", "pk"],
+            },
+          },
+          {
+            name: "get_project_db_usage",
+            description: "查询项目数据库已用字节与上限。",
+            inputSchema: {
+              type: "object",
+              properties: {
+                projectId: { type: "string" },
+              },
+              required: ["projectId"],
+            },
+          },
         ],
       };
     });
@@ -224,27 +355,7 @@ class DemoxMCPServer {
           this.demoxClient = new DemoxClient(accessToken);
         }
 
-        // 路由到具体的处理方法
-        switch (name) {
-          case "deploy_website":
-            return await this.handleDeploy(args, accessToken);
-          case "list_websites":
-            return await this.handleList(accessToken);
-          case "list_projects":
-            return await this.handleListProjects(accessToken);
-          case "get_website":
-            return await this.handleGet(args, accessToken);
-          case "check_custom_domain":
-            return await this.handleCheckCustomDomain(args, accessToken);
-          case "set_custom_domain":
-            return await this.handleSetCustomDomain(args, accessToken);
-          case "clear_custom_domain":
-            return await this.handleClearCustomDomain(args, accessToken);
-          case "delete_website":
-            return await this.handleDelete(args, accessToken);
-          default:
-            throw new Error(`未知工具: ${name}`);
-        }
+        return await this.routeTool(name, args, accessToken);
       } catch (error: any) {
         logger.error(`工具调用失败 (${name}):`, error.message);
 
@@ -268,27 +379,7 @@ class DemoxMCPServer {
 
             logger.info("登录成功，正在重试工具调用...");
 
-            // 重新执行工具调用
-            switch (name) {
-              case "deploy_website":
-                return await this.handleDeploy(args, newAccessToken);
-              case "list_websites":
-                return await this.handleList(newAccessToken);
-              case "list_projects":
-                return await this.handleListProjects(newAccessToken);
-              case "get_website":
-                return await this.handleGet(args, newAccessToken);
-              case "check_custom_domain":
-                return await this.handleCheckCustomDomain(args, newAccessToken);
-              case "set_custom_domain":
-                return await this.handleSetCustomDomain(args, newAccessToken);
-              case "clear_custom_domain":
-                return await this.handleClearCustomDomain(args, newAccessToken);
-              case "delete_website":
-                return await this.handleDelete(args, newAccessToken);
-              default:
-                throw new Error(`未知工具: ${name}`);
-            }
+            return await this.routeTool(name, args, newAccessToken);
           } catch (loginError: any) {
             logger.error("自动登录失败:", loginError.message);
             return {
@@ -324,6 +415,123 @@ demox-mcp login
         };
       }
     });
+  }
+
+  private async routeTool(name: string, args: any, accessToken: string) {
+    switch (name) {
+      case "deploy_website":
+        return await this.handleDeploy(args, accessToken);
+      case "list_websites":
+        return await this.handleList(accessToken);
+      case "list_projects":
+        return await this.handleListProjects(accessToken);
+      case "get_website":
+        return await this.handleGet(args, accessToken);
+      case "check_custom_domain":
+        return await this.handleCheckCustomDomain(args, accessToken);
+      case "set_custom_domain":
+        return await this.handleSetCustomDomain(args, accessToken);
+      case "clear_custom_domain":
+        return await this.handleClearCustomDomain(args, accessToken);
+      case "delete_website":
+        return await this.handleDelete(args, accessToken);
+      case "create_project":
+        return await this.handleCreateProject(args, accessToken);
+      case "list_project_tables":
+        return await this.handleListProjectTables(args, accessToken);
+      case "create_project_table":
+        return await this.handleCreateProjectTable(args, accessToken);
+      case "get_project_table":
+        return await this.handleGetProjectTable(args, accessToken);
+      case "delete_project_table":
+        return await this.handleDeleteProjectTable(args, accessToken);
+      case "list_project_rows":
+        return await this.handleListProjectRows(args, accessToken);
+      case "put_project_row":
+        return await this.handlePutProjectRow(args, accessToken);
+      case "delete_project_row":
+        return await this.handleDeleteProjectRow(args, accessToken);
+      case "get_project_db_usage":
+        return await this.handleGetProjectDbUsage(args, accessToken);
+      default:
+        throw new Error(`未知工具: ${name}`);
+    }
+  }
+
+  private jsonResult(payload: unknown) {
+    return {
+      content: [{ type: "text" as const, text: JSON.stringify(payload, null, 2) }],
+    };
+  }
+
+  private async handleCreateProject(args: any, accessToken: string) {
+    if (!args?.name) throw new Error("缺少必需参数: name");
+    const result = await this.demoxClient!.createProject(
+      { name: args.name, slug: args.slug, description: args.description },
+      accessToken
+    );
+    return this.jsonResult(result);
+  }
+
+  private async handleListProjectTables(args: any, accessToken: string) {
+    if (!args?.projectId) throw new Error("缺少必需参数: projectId");
+    return this.jsonResult(await this.demoxClient!.listProjectTables(args.projectId, accessToken));
+  }
+
+  private async handleCreateProjectTable(args: any, accessToken: string) {
+    if (!args?.projectId || !args?.name || !args?.columns) {
+      throw new Error("缺少必需参数: projectId, name, columns");
+    }
+    return this.jsonResult(
+      await this.demoxClient!.createProjectTable(args.projectId, args.name, args.columns, accessToken)
+    );
+  }
+
+  private async handleGetProjectTable(args: any, accessToken: string) {
+    if (!args?.projectId || !args?.table) throw new Error("缺少必需参数: projectId, table");
+    return this.jsonResult(
+      await this.demoxClient!.getProjectTable(args.projectId, args.table, accessToken)
+    );
+  }
+
+  private async handleDeleteProjectTable(args: any, accessToken: string) {
+    if (!args?.projectId || !args?.table) throw new Error("缺少必需参数: projectId, table");
+    return this.jsonResult(
+      await this.demoxClient!.deleteProjectTable(args.projectId, args.table, accessToken)
+    );
+  }
+
+  private async handleListProjectRows(args: any, accessToken: string) {
+    if (!args?.projectId || !args?.table) throw new Error("缺少必需参数: projectId, table");
+    return this.jsonResult(
+      await this.demoxClient!.listProjectRows(args.projectId, args.table, accessToken, {
+        limit: args.limit,
+        after: args.after,
+      })
+    );
+  }
+
+  private async handlePutProjectRow(args: any, accessToken: string) {
+    if (!args?.projectId || !args?.table || !args?.values) {
+      throw new Error("缺少必需参数: projectId, table, values");
+    }
+    return this.jsonResult(
+      await this.demoxClient!.putProjectRow(args.projectId, args.table, args.values, accessToken)
+    );
+  }
+
+  private async handleDeleteProjectRow(args: any, accessToken: string) {
+    if (!args?.projectId || !args?.table || args?.pk == null) {
+      throw new Error("缺少必需参数: projectId, table, pk");
+    }
+    return this.jsonResult(
+      await this.demoxClient!.deleteProjectRow(args.projectId, args.table, String(args.pk), accessToken)
+    );
+  }
+
+  private async handleGetProjectDbUsage(args: any, accessToken: string) {
+    if (!args?.projectId) throw new Error("缺少必需参数: projectId");
+    return this.jsonResult(await this.demoxClient!.getProjectDbUsage(args.projectId, accessToken));
   }
 
   /**

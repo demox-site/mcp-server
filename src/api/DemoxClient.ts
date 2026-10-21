@@ -642,4 +642,108 @@ export class DemoxClient {
       return false;
     }
   }
+
+  async createProject(
+    params: { name: string; slug?: string; description?: string },
+    accessToken: string
+  ): Promise<any> {
+    return await this.callApi(
+      "/website/create-project",
+      { action: "create_project", ...params },
+      accessToken,
+      this.websiteApiUrl
+    );
+  }
+
+  async listProjectTables(projectId: string, accessToken: string): Promise<any> {
+    return await this.callApi(
+      "/website/list-project-tables",
+      { action: "list_project_tables", projectId },
+      accessToken,
+      this.websiteApiUrl
+    );
+  }
+
+  async createProjectTable(
+    projectId: string,
+    name: string,
+    columns: Array<{ name: string; type: string; primary?: boolean }>,
+    accessToken: string
+  ): Promise<any> {
+    return await this.callApi(
+      "/website/create-project-table",
+      { action: "create_project_table", projectId, name, columns },
+      accessToken,
+      this.websiteApiUrl
+    );
+  }
+
+  async getProjectTable(projectId: string, table: string, accessToken: string): Promise<any> {
+    return await this.callApi(
+      "/website/get-project-table",
+      { action: "get_project_table", projectId, table },
+      accessToken,
+      this.websiteApiUrl
+    );
+  }
+
+  async deleteProjectTable(projectId: string, table: string, accessToken: string): Promise<any> {
+    return await this.callApi(
+      "/website/delete-project-table",
+      { action: "delete_project_table", projectId, table },
+      accessToken,
+      this.websiteApiUrl
+    );
+  }
+
+  async listProjectRows(
+    projectId: string,
+    table: string,
+    accessToken: string,
+    opts: { limit?: number; after?: string } = {}
+  ): Promise<any> {
+    return await this.callApi(
+      "/website/list-project-rows",
+      { action: "list_project_rows", projectId, table, ...opts },
+      accessToken,
+      this.websiteApiUrl
+    );
+  }
+
+  async putProjectRow(
+    projectId: string,
+    table: string,
+    values: Record<string, unknown>,
+    accessToken: string
+  ): Promise<any> {
+    return await this.callApi(
+      "/website/put-project-row",
+      { action: "put_project_row", projectId, table, values },
+      accessToken,
+      this.websiteApiUrl
+    );
+  }
+
+  async deleteProjectRow(
+    projectId: string,
+    table: string,
+    pk: string,
+    accessToken: string
+  ): Promise<any> {
+    return await this.callApi(
+      "/website/delete-project-row",
+      { action: "delete_project_row", projectId, table, pk },
+      accessToken,
+      this.websiteApiUrl
+    );
+  }
+
+  async getProjectDbUsage(projectId: string, accessToken: string): Promise<any> {
+    return await this.callApi(
+      "/website/get-project-db-usage",
+      { action: "get_project_db_usage", projectId },
+      accessToken,
+      this.websiteApiUrl
+    );
+  }
 }
