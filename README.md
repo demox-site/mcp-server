@@ -3,7 +3,7 @@
 [![npm version](https://badge.fury.io/js/%40demox-site%2Fmcp-server.svg)](https://www.npmjs.com/package/@demox-site/mcp-server)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-> Demox MCP Server - 通过 AI 部署静态网站到 Demox 平台
+> Demox MCP Server - 通过 AI 部署静态网站并管理项目数据库
 
 ## 📖 目录
 
@@ -27,6 +27,8 @@ MCP (Model Context Protocol) 是 AI 助手与工具之间的标准化协议，�
 - 🚀 **一键部署**: 部署静态网站到 Demox 平台
 - 📦 **自动打包/转换**: 支持目录、ZIP、PDF、Markdown、TXT、DOCX
 - ☁️ **云端部署**: 上传 ZIP 后由 Demox 后端解压并发布
+- 🗄️ **项目数据库**: 按项目建表、读写行、查看用量（默认每项目 100MB）
+- 📁 **项目管理**: 列出 / 创建项目（普通用户默认最多 3 个）
 - 🔐 **自动登录**: Token 过期时自动触发登录流程
 - 💻 **AI 集成**: 与 Claude Code、Cursor 等 MCP 客户端无缝集成
 - 🌐 **官方域名子域名**: 检查、设置、清除 `<subdomain>.demox.site` / `<subdomain>.vibeme.cn`
@@ -203,6 +205,82 @@ MCP (Model Context Protocol) 是 AI 助手与工具之间的标准化协议，�
 
 **⚠️ 注意**: 此操作不可撤销
 
+### create_project
+
+创建 Demox 项目。普通用户默认最多 3 个未归档自有项目；超出返回 `quota`。
+
+**参数**:
+- `name` (string, **必需**): 项目名称
+- `slug` (string, 可选): 项目 slug
+- `description` (string, 可选): 项目描述
+
+### list_project_tables
+
+列出项目数据库中的表，并返回用量（`bytesUsed` / `bytesLimit`，默认每项目 100MB）。
+
+**参数**:
+- `projectId` (string, **必需**): 项目 ID
+
+### create_project_table
+
+在项目数据库中建表。列类型仅 `text` / `number` / `boolean`，且必须正好一个 **text** 主键。
+
+**参数**:
+- `projectId` (string, **必需**)
+- `name` (string, **必需**): 表名（小写字母开头）
+- `columns` (array, **必需**): 列定义，每项含 `name`、`type`，可选 `primary`
+
+### get_project_table
+
+获取一张表的结构与行数。
+
+**参数**:
+- `projectId` (string, **必需**)
+- `table` (string, **必需**): 表名
+
+### delete_project_table
+
+删除表及其全部行。不可撤销。
+
+**参数**:
+- `projectId` (string, **必需**)
+- `table` (string, **必需**)
+
+### list_project_rows
+
+分页列出表中的行。
+
+**参数**:
+- `projectId` (string, **必需**)
+- `table` (string, **必需**)
+- `limit` (number, 可选): 每页行数，默认 50，最大 100
+- `after` (string, 可选): 上一页最后一行主键
+
+### put_project_row
+
+按主键写入或覆盖一行。超过项目数据库容量时返回 `quota`。
+
+**参数**:
+- `projectId` (string, **必需**)
+- `table` (string, **必需**)
+- `values` (object, **必需**): 行字段，必须包含主键列
+
+### delete_project_row
+
+按主键删除一行。
+
+**参数**:
+- `projectId` (string, **必需**)
+- `table` (string, **必需**)
+- `pk` (string, **必需**): 主键值
+
+### get_project_db_usage
+
+查询项目数据库已用字节与上限。
+
+**参数**:
+- `projectId` (string, **必需**)
+
 ---
 
 ## 使用示例
@@ -237,6 +315,20 @@ Claude: 好的，我来帮您部署 dist 目录。
 # 3. 上传到云存储
 # 4. 调用云函数部署
 # 5. 返回访问链接
+```
+
+### 项目数据库
+
+```
+用户: 在项目 PROJ1 里建一张 notes 表，写入一条记录
+
+Claude: 我先创建表，再写入一行。
+
+[create_project_table …]
+[put_project_row …]
+
+✅ 已写入 notes 表（主键 id=1）
+可用 demox db usage / get_project_db_usage 查看容量（默认 100MB/项目）
 ```
 
 ### 示例对话
